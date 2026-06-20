@@ -103,8 +103,8 @@ const api = {
     },
 
     // ─── Bookings ───────────────────────────────
-    createBooking(eventId, quantity) {
-        return this.post('/bookings', { event_id: eventId, quantity });
+    createBooking(eventId, quantity, phoneNumber) {
+        return this.post('/bookings', { event_id: eventId, quantity, phone_number: phoneNumber });
     },
 
     getBookings() {
@@ -115,8 +115,17 @@ const api = {
         return this.get(`/bookings/${bookingRef}`);
     },
 
+    getBookingStatus(bookingRef) {
+        return this.get(`/bookings/${bookingRef}/status`);
+    },
+
     cancelBooking(bookingRef) {
         return this.post(`/bookings/${bookingRef}/cancel`);
+    },
+
+    // ─── Payments ────────────────────────────────
+    queryMpesaStatus(bookingRef) {
+        return this.get(`/payments/mpesa/query/${bookingRef}`);
     },
 
     // ─── Tickets ────────────────────────────────
@@ -126,6 +135,11 @@ const api = {
 
     verifyTicket(ticketCode) {
         return this.post('/tickets/verify', { ticket_code: ticketCode });
+    },
+
+    // ─── Organizer Earnings ─────────────────────
+    getOrganizerEarnings() {
+        return this.get('/organizer/earnings');
     },
 
     // ─── Admin ──────────────────────────────────
@@ -148,5 +162,27 @@ const api = {
     getAdminEvents(status) {
         const query = status ? `?status=${status}` : '';
         return this.get(`/admin/events${query}`);
+    },
+
+    getAdminOrganizerEarnings() {
+        return this.get('/admin/organizer-earnings');
+    },
+
+    getAdminPayouts(status) {
+        const query = status ? `?status=${status}` : '';
+        return this.get(`/admin/payouts${query}`);
+    },
+
+    createPayout(organizerId, amount, notes) {
+        return this.post('/admin/payouts', { organizer_id: organizerId, amount, notes });
+    },
+
+    processPayout(payoutId, action, paymentReference, notes) {
+        return this.post(`/admin/payouts/${payoutId}/process`, { action, payment_reference: paymentReference, notes });
+    },
+
+    getAdminPayments(status) {
+        const query = status ? `?status=${status}` : '';
+        return this.get(`/admin/payments${query}`);
     },
 };

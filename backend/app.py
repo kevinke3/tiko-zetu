@@ -13,7 +13,8 @@ from flask_cors import CORS
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 import qrcode
 
-from models import db, User, Event, Booking
+from models import db, User, Event, Booking, Payment, Payout
+from mpesa import initiate_stk_push, normalize_phone, query_stk_status, MpesaError
 
 
 def create_app():
@@ -302,6 +303,7 @@ def create_app():
 
         event_id = data.get('event_id')
         quantity = int(data.get('quantity', 1))
+        phone_number = data.get('phone_number', '')
 
         event = Event.query.filter_by(public_id=event_id).first()
         if not event:
@@ -317,18 +319,101 @@ def create_app():
             return jsonify({'error': 'Quantity must be at least 1'}), 400
 
         total_amount = event.price * quantity
+        booking_ref = generate_booking_ref()
+
+        # Free events: confirm immediately
+        if total_amount == 0:
+            booking = Booking(
+                booking_ref=booking_ref,
+                quantity=quantity,
+                total_amount=0,
+                status='confirmed',
+                payment_status='completed',
+                user_id=current_user.id,
+                event_id=event.id,
+            )
+            payment = Payment(
+                phone_number=current_user.phone or '0',
+                amount=0,
+                method='free',
+                status='completed',
+                booking=booking,
+            )
+            event.tickets_sold += quantity
+            db.session.add(booking)
+            db.session.add(payment)
+            db.session.commit()
+            return jsonify({'message': 'Booking confirmed!', 'booking': booking.to_dict()}), 201
+
+        # Paid events: require phone number for M-Pesa
+        if not phone_number:
+            phone_number = current_user.phone or ''
+        if not phone_number:
+            return jsonify({'error': 'Phone number required for M-Pesa payment'}), 400
+
+        phone_number = normalize_phone(phone_number)
+
+        # Reserve tickets and create pending booking
         booking = Booking(
-            booking_ref=generate_booking_ref(),
+            booking_ref=booking_ref,
             quantity=quantity,
             total_amount=total_amount,
+            status='pending_payment',
+            payment_status='pending',
             user_id=current_user.id,
             event_id=event.id,
         )
         event.tickets_sold += quantity
-
         db.session.add(booking)
-        db.session.commit()
-        return jsonify({'message': 'Booking confirmed!', 'booking': booking.to_dict()}), 201
+        db.session.flush()
+
+        # Initiate M-Pesa STK Push
+        try:
+            mpesa_response = initiate_stk_push(
+                phone_number=phone_number,
+                amount=total_amount,
+                booking_ref=booking_ref,
+            )
+            payment = Payment(
+                checkout_request_id=mpesa_response.get('CheckoutRequestID'),
+                merchant_request_id=mpesa_response.get('MerchantRequestID'),
+                phone_number=phone_number,
+                amount=total_amount,
+                method='mpesa',
+                status='pending',
+                booking_id=booking.id,
+            )
+            db.session.add(payment)
+            db.session.commit()
+            return jsonify({
+                'message': 'Payment initiated! Check your phone for the M-Pesa prompt.',
+                'booking': booking.to_dict(),
+                'payment_pending': True,
+                'checkout_request_id': mpesa_response.get('CheckoutRequestID'),
+            }), 201
+        except MpesaError as e:
+            # M-Pesa not configured or failed — fall back to simulated payment
+            payment = Payment(
+                transaction_id=f'SIM-{booking_ref}',
+                phone_number=phone_number,
+                amount=total_amount,
+                method='mpesa',
+                status='completed',
+                result_code=0,
+                result_desc='Simulated payment (M-Pesa not configured)',
+                booking_id=booking.id,
+                completed_at=datetime.now(timezone.utc),
+            )
+            booking.status = 'confirmed'
+            booking.payment_status = 'completed'
+            db.session.add(payment)
+            db.session.commit()
+            return jsonify({
+                'message': 'Booking confirmed! (Payment simulated)',
+                'booking': booking.to_dict(),
+                'payment_pending': False,
+                'simulated': True,
+            }), 201
 
     @app.route('/api/bookings', methods=['GET'])
     @login_required
@@ -363,9 +448,109 @@ def create_app():
             return jsonify({'error': 'Booking already cancelled'}), 400
 
         booking.status = 'cancelled'
+        booking.payment_status = 'refunded' if booking.payment_status == 'completed' else 'cancelled'
         booking.event.tickets_sold -= booking.quantity
         db.session.commit()
         return jsonify({'message': 'Booking cancelled', 'booking': booking.to_dict()})
+
+    @app.route('/api/bookings/<string:booking_ref>/status', methods=['GET'])
+    @login_required
+    def check_booking_status(booking_ref):
+        booking = Booking.query.filter_by(booking_ref=booking_ref).first()
+        if not booking:
+            return jsonify({'error': 'Booking not found'}), 404
+        if current_user.role != 'admin' and booking.user_id != current_user.id:
+            return jsonify({'error': 'Access denied'}), 403
+        return jsonify({
+            'booking_ref': booking.booking_ref,
+            'status': booking.status,
+            'payment_status': booking.payment_status,
+            'booking': booking.to_dict(),
+        })
+
+    # ─── M-Pesa Callback ─────────────────────────────────────────────
+    @app.route('/api/payments/mpesa/callback', methods=['POST'])
+    def mpesa_callback():
+        data = request.get_json()
+        if not data:
+            return jsonify({'ResultCode': 0, 'ResultDesc': 'Accepted'})
+
+        body = data.get('Body', {}).get('stkCallback', {})
+        checkout_request_id = body.get('CheckoutRequestID')
+        result_code = body.get('ResultCode')
+        result_desc = body.get('ResultDesc', '')
+
+        if not checkout_request_id:
+            return jsonify({'ResultCode': 0, 'ResultDesc': 'Accepted'})
+
+        payment = Payment.query.filter_by(checkout_request_id=checkout_request_id).first()
+        if not payment:
+            return jsonify({'ResultCode': 0, 'ResultDesc': 'Payment not found'})
+
+        payment.result_code = result_code
+        payment.result_desc = result_desc
+
+        if result_code == 0:
+            # Payment successful
+            metadata = body.get('CallbackMetadata', {}).get('Item', [])
+            for item in metadata:
+                name = item.get('Name')
+                value = item.get('Value')
+                if name == 'MpesaReceiptNumber':
+                    payment.mpesa_receipt = value
+                elif name == 'TransactionDate':
+                    payment.transaction_id = str(value)
+
+            payment.status = 'completed'
+            payment.completed_at = datetime.now(timezone.utc)
+            payment.booking.status = 'confirmed'
+            payment.booking.payment_status = 'completed'
+        else:
+            # Payment failed or cancelled
+            payment.status = 'failed'
+            payment.booking.status = 'cancelled'
+            payment.booking.payment_status = 'failed'
+            payment.booking.event.tickets_sold -= payment.booking.quantity
+
+        db.session.commit()
+        return jsonify({'ResultCode': 0, 'ResultDesc': 'Accepted'})
+
+    @app.route('/api/payments/mpesa/query/<string:booking_ref>', methods=['GET'])
+    @login_required
+    def mpesa_query(booking_ref):
+        booking = Booking.query.filter_by(booking_ref=booking_ref).first()
+        if not booking:
+            return jsonify({'error': 'Booking not found'}), 404
+        if current_user.role != 'admin' and booking.user_id != current_user.id:
+            return jsonify({'error': 'Access denied'}), 403
+
+        payment = booking.payment
+        if not payment or not payment.checkout_request_id:
+            return jsonify({'error': 'No M-Pesa payment found for this booking'}), 404
+
+        if payment.status == 'completed':
+            return jsonify({'status': 'completed', 'booking': booking.to_dict()})
+
+        try:
+            result = query_stk_status(payment.checkout_request_id)
+            result_code = result.get('ResultCode')
+            if result_code is not None:
+                if int(result_code) == 0:
+                    payment.status = 'completed'
+                    payment.completed_at = datetime.now(timezone.utc)
+                    booking.status = 'confirmed'
+                    booking.payment_status = 'completed'
+                else:
+                    payment.status = 'failed'
+                    payment.result_desc = result.get('ResultDesc', '')
+                    booking.status = 'cancelled'
+                    booking.payment_status = 'failed'
+                    booking.event.tickets_sold -= booking.quantity
+                db.session.commit()
+        except Exception:
+            pass
+
+        return jsonify({'status': payment.status, 'booking': booking.to_dict()})
 
     # ─── QR Code / Ticket ────────────────────────────────────────────
     @app.route('/api/tickets/<string:ticket_code>/qr', methods=['GET'])
@@ -480,11 +665,25 @@ def create_app():
         total_events = Event.query.count()
         approved_events = Event.query.filter_by(status='approved').count()
         pending_events = Event.query.filter_by(status='pending').count()
-        total_bookings = Booking.query.count()
+        total_bookings = Booking.query.filter(Booking.status != 'cancelled').count()
         total_revenue = db.session.query(db.func.sum(Booking.total_amount)).filter(
-            Booking.status != 'cancelled'
+            Booking.status != 'cancelled',
+            Booking.payment_status == 'completed'
         ).scalar() or 0
         verified_tickets = Booking.query.filter_by(is_verified=True).count()
+        total_payments = db.session.query(db.func.sum(Payment.amount)).filter(
+            Payment.status == 'completed'
+        ).scalar() or 0
+        pending_payments = Payment.query.filter_by(status='pending').count()
+        total_payouts = db.session.query(db.func.sum(Payout.net_amount)).filter(
+            Payout.status == 'completed'
+        ).scalar() or 0
+        pending_payouts = Payout.query.filter(
+            Payout.status.in_(['pending', 'processing'])
+        ).count()
+        total_commission = db.session.query(db.func.sum(Payout.commission_amount)).filter(
+            Payout.status == 'completed'
+        ).scalar() or 0
 
         return jsonify({
             'stats': {
@@ -495,8 +694,221 @@ def create_app():
                 'total_bookings': total_bookings,
                 'total_revenue': total_revenue,
                 'verified_tickets': verified_tickets,
+                'total_payments': total_payments,
+                'pending_payments': pending_payments,
+                'total_payouts': total_payouts,
+                'pending_payouts': pending_payouts,
+                'total_commission': total_commission,
             }
         })
+
+    # ─── Organizer Earnings ───────────────────────────────────────────
+    @app.route('/api/organizer/earnings', methods=['GET'])
+    @login_required
+    @role_required('organizer', 'admin')
+    def organizer_earnings():
+        org_id = current_user.id
+        events = Event.query.filter_by(organizer_id=org_id).all()
+        event_ids = [e.id for e in events]
+
+        total_sales = db.session.query(db.func.sum(Booking.total_amount)).filter(
+            Booking.event_id.in_(event_ids),
+            Booking.status != 'cancelled',
+            Booking.payment_status == 'completed'
+        ).scalar() or 0
+
+        total_bookings = Booking.query.filter(
+            Booking.event_id.in_(event_ids),
+            Booking.status != 'cancelled'
+        ).count()
+
+        commission_rate = 0.10
+        platform_fee = total_sales * commission_rate
+        net_earnings = total_sales - platform_fee
+
+        total_paid = db.session.query(db.func.sum(Payout.net_amount)).filter(
+            Payout.organizer_id == org_id,
+            Payout.status == 'completed'
+        ).scalar() or 0
+
+        balance = net_earnings - total_paid
+
+        # Per-event breakdown
+        event_earnings = []
+        for e in events:
+            ev_sales = db.session.query(db.func.sum(Booking.total_amount)).filter(
+                Booking.event_id == e.id,
+                Booking.status != 'cancelled',
+                Booking.payment_status == 'completed'
+            ).scalar() or 0
+            ev_bookings = Booking.query.filter(
+                Booking.event_id == e.id,
+                Booking.status != 'cancelled'
+            ).count()
+            event_earnings.append({
+                'event': e.to_dict(),
+                'total_sales': ev_sales,
+                'bookings': ev_bookings,
+                'commission': ev_sales * commission_rate,
+                'net': ev_sales * (1 - commission_rate),
+            })
+
+        payouts = Payout.query.filter_by(organizer_id=org_id).order_by(
+            Payout.created_at.desc()
+        ).all()
+
+        return jsonify({
+            'earnings': {
+                'total_sales': total_sales,
+                'total_bookings': total_bookings,
+                'commission_rate': commission_rate,
+                'platform_fee': platform_fee,
+                'net_earnings': net_earnings,
+                'total_paid': total_paid,
+                'balance': balance,
+                'event_breakdown': event_earnings,
+                'payouts': [p.to_dict() for p in payouts],
+            }
+        })
+
+    # ─── Admin Payouts ────────────────────────────────────────────────
+    @app.route('/api/admin/payouts', methods=['GET'])
+    @login_required
+    @role_required('admin')
+    def admin_list_payouts():
+        status = request.args.get('status')
+        query = Payout.query
+        if status:
+            query = query.filter_by(status=status)
+        payouts = query.order_by(Payout.created_at.desc()).all()
+        return jsonify({'payouts': [p.to_dict() for p in payouts]})
+
+    @app.route('/api/admin/payouts', methods=['POST'])
+    @login_required
+    @role_required('admin')
+    def create_payout():
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+
+        organizer_id = data.get('organizer_id')
+        organizer = db.session.get(User, organizer_id)
+        if not organizer or organizer.role != 'organizer':
+            return jsonify({'error': 'Organizer not found'}), 404
+
+        # Calculate what's owed
+        events = Event.query.filter_by(organizer_id=organizer_id).all()
+        event_ids = [e.id for e in events]
+        total_sales = db.session.query(db.func.sum(Booking.total_amount)).filter(
+            Booking.event_id.in_(event_ids),
+            Booking.status != 'cancelled',
+            Booking.payment_status == 'completed'
+        ).scalar() or 0
+
+        commission_rate = 0.10
+        total_commission = total_sales * commission_rate
+        net_total = total_sales - total_commission
+
+        already_paid = db.session.query(db.func.sum(Payout.net_amount)).filter(
+            Payout.organizer_id == organizer_id,
+            Payout.status.in_(['completed', 'processing', 'pending'])
+        ).scalar() or 0
+
+        available = net_total - already_paid
+        amount = float(data.get('amount', available))
+
+        if amount <= 0:
+            return jsonify({'error': 'No earnings available for payout'}), 400
+        if amount > available:
+            return jsonify({'error': f'Amount exceeds available balance of KES {available:,.0f}'}), 400
+
+        payout_commission = amount * commission_rate / (1 - commission_rate)
+        payout = Payout(
+            payout_ref=f'PO-{generate_booking_ref()[3:]}',
+            organizer_id=organizer_id,
+            amount=amount + payout_commission,
+            commission_rate=commission_rate,
+            commission_amount=payout_commission,
+            net_amount=amount,
+            status='pending',
+            payment_method=data.get('payment_method', 'mpesa'),
+            notes=data.get('notes', ''),
+        )
+        db.session.add(payout)
+        db.session.commit()
+        return jsonify({'message': 'Payout created', 'payout': payout.to_dict()}), 201
+
+    @app.route('/api/admin/payouts/<int:payout_id>/process', methods=['POST'])
+    @login_required
+    @role_required('admin')
+    def process_payout(payout_id):
+        payout = db.session.get(Payout, payout_id)
+        if not payout:
+            return jsonify({'error': 'Payout not found'}), 404
+
+        data = request.get_json() or {}
+        action = data.get('action', 'complete')  # complete or fail
+
+        if action == 'complete':
+            payout.status = 'completed'
+            payout.payment_reference = data.get('payment_reference', '')
+            payout.processed_at = datetime.now(timezone.utc)
+            msg = 'Payout marked as completed'
+        else:
+            payout.status = 'failed'
+            payout.notes = data.get('notes', payout.notes)
+            msg = 'Payout marked as failed'
+
+        db.session.commit()
+        return jsonify({'message': msg, 'payout': payout.to_dict()})
+
+    @app.route('/api/admin/organizer-earnings', methods=['GET'])
+    @login_required
+    @role_required('admin')
+    def admin_organizer_earnings():
+        organizers = User.query.filter_by(role='organizer').all()
+        result = []
+        commission_rate = 0.10
+
+        for org in organizers:
+            events = Event.query.filter_by(organizer_id=org.id).all()
+            event_ids = [e.id for e in events]
+            total_sales = db.session.query(db.func.sum(Booking.total_amount)).filter(
+                Booking.event_id.in_(event_ids),
+                Booking.status != 'cancelled',
+                Booking.payment_status == 'completed'
+            ).scalar() or 0
+
+            total_paid = db.session.query(db.func.sum(Payout.net_amount)).filter(
+                Payout.organizer_id == org.id,
+                Payout.status == 'completed'
+            ).scalar() or 0
+
+            net_earnings = total_sales * (1 - commission_rate)
+            balance = net_earnings - total_paid
+
+            result.append({
+                'organizer': org.to_dict(),
+                'total_sales': total_sales,
+                'commission': total_sales * commission_rate,
+                'net_earnings': net_earnings,
+                'total_paid': total_paid,
+                'balance': balance,
+                'event_count': len(events),
+            })
+
+        return jsonify({'organizer_earnings': result})
+
+    @app.route('/api/admin/payments', methods=['GET'])
+    @login_required
+    @role_required('admin')
+    def admin_list_payments():
+        status = request.args.get('status')
+        query = Payment.query
+        if status:
+            query = query.filter_by(status=status)
+        payments = query.order_by(Payment.created_at.desc()).all()
+        return jsonify({'payments': [p.to_dict() for p in payments]})
 
     return app
 

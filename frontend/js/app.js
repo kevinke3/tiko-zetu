@@ -152,6 +152,7 @@ function navigate(page, data) {
         case 'event-detail': loadEventDetail(data); break;
         case 'my-tickets': loadMyTickets(); break;
         case 'organizer-dashboard': loadOrganizerDashboard(); break;
+        case 'organizer-earnings': loadOrganizerEarnings(); break;
         case 'admin': loadAdminPanel(); break;
     }
 }
@@ -276,12 +277,28 @@ async function loadEventDetail(publicId) {
                             <button type="button" onclick="updateQty(1)"><i class="fas fa-plus"></i></button>
                         </div>
                     </div>
+                    ${event.price > 0 ? `
+                    <div class="form-group" style="margin: 16px 0;">
+                        <label style="font-size: 0.85rem; color: var(--text-secondary); margin-bottom: 6px; display: block;">M-Pesa Phone Number</label>
+                        <div class="input-wrapper">
+                            <i class="fas fa-phone"></i>
+                            <input type="tel" id="mpesaPhone" placeholder="e.g. 0712345678" value="${currentUser?.phone || ''}" style="width: 100%;">
+                        </div>
+                        <small style="color: var(--text-muted); font-size: 0.75rem;">You'll receive an STK push on this number</small>
+                    </div>
+                    ` : ''}
                     <div class="booking-total">
                         <span>Total</span>
                         <span class="booking-total-amount" id="bookingTotalAmount">${totalDisplay}</span>
                     </div>
+                    ${event.price > 0 ? `
+                    <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 12px; padding: 10px; background: rgba(0,200,83,0.08); border-radius: 8px; font-size: 0.82rem; color: var(--secondary);">
+                        <i class="fas fa-shield-alt"></i>
+                        <span>Secured by M-Pesa Lipa Na M-Pesa</span>
+                    </div>
+                    ` : ''}
                     <button class="btn btn-primary btn-block btn-lg" onclick="handleBooking('${event.public_id}')" id="bookNowBtn">
-                        <i class="fas fa-ticket-alt"></i> Book Now
+                        <i class="fas fa-${event.price > 0 ? 'mobile-alt' : 'ticket-alt'}"></i> ${event.price > 0 ? 'Pay with M-Pesa' : 'Book Now'}
                     </button>
                     ` : `
                     <button class="btn btn-ghost btn-block btn-lg" disabled>
@@ -315,19 +332,90 @@ async function handleBooking(eventPublicId) {
     }
 
     const btn = document.getElementById('bookNowBtn');
+    const phoneInput = document.getElementById('mpesaPhone');
+    const phone = phoneInput ? phoneInput.value.trim() : '';
+
+    if (currentEventData && currentEventData.price > 0 && !phone) {
+        showToast('Please enter your M-Pesa phone number', 'error');
+        if (phoneInput) phoneInput.focus();
+        return;
+    }
+
     btn.disabled = true;
-    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
+    btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Initiating payment...';
 
     try {
-        const data = await api.createBooking(eventPublicId, currentBookingQty);
-        showToast('Booking confirmed! Check My Tickets for your QR code.', 'success');
-        navigate('my-tickets');
+        const data = await api.createBooking(eventPublicId, currentBookingQty, phone);
+
+        if (data.payment_pending) {
+            showToast('Check your phone for the M-Pesa prompt!', 'success');
+            showPaymentPendingModal(data.booking.booking_ref, data.checkout_request_id);
+        } else {
+            const msg = data.simulated
+                ? 'Booking confirmed! (Payment simulated — configure M-Pesa for real payments)'
+                : 'Booking confirmed! Check My Tickets for your QR code.';
+            showToast(msg, 'success');
+            navigate('my-tickets');
+        }
     } catch (err) {
         showToast(err.message, 'error');
     } finally {
         btn.disabled = false;
-        btn.innerHTML = '<i class="fas fa-ticket-alt"></i> Book Now';
+        const isPaid = currentEventData && currentEventData.price > 0;
+        btn.innerHTML = `<i class="fas fa-${isPaid ? 'mobile-alt' : 'ticket-alt'}"></i> ${isPaid ? 'Pay with M-Pesa' : 'Book Now'}`;
     }
+}
+
+function showPaymentPendingModal(bookingRef, checkoutRequestId) {
+    const modal = document.getElementById('ticketModal');
+    const body = document.getElementById('ticketModalBody');
+
+    body.innerHTML = `
+        <div class="ticket-detail" style="text-align: center;">
+            <div style="font-size: 3rem; color: var(--accent-warm); margin-bottom: 16px;"><i class="fas fa-mobile-alt"></i></div>
+            <h3>Waiting for M-Pesa Payment</h3>
+            <p style="color: var(--text-secondary); margin: 12px 0;">Please check your phone and enter your M-Pesa PIN to complete the payment.</p>
+            <p style="font-size: 0.85rem; color: var(--text-muted);">Booking Ref: <strong>${bookingRef}</strong></p>
+            <div style="margin: 24px 0;">
+                <div class="loading-spinner"><i class="fas fa-spinner fa-spin" style="font-size: 2rem; color: var(--secondary);"></i></div>
+                <p id="paymentStatusText" style="margin-top: 12px; color: var(--text-secondary);">Waiting for payment confirmation...</p>
+            </div>
+            <button class="btn btn-ghost" onclick="closeModal('ticketModal'); navigate('my-tickets');" style="margin-top: 12px;">Check My Tickets</button>
+        </div>
+    `;
+
+    modal.classList.add('show');
+    pollPaymentStatus(bookingRef, 0);
+}
+
+async function pollPaymentStatus(bookingRef, attempts) {
+    if (attempts > 30) {
+        const el = document.getElementById('paymentStatusText');
+        if (el) el.textContent = 'Payment timeout. Check My Tickets for status.';
+        return;
+    }
+
+    try {
+        const data = await api.getBookingStatus(bookingRef);
+        if (data.payment_status === 'completed') {
+            showToast('Payment received! Your ticket is ready.', 'success');
+            closeModal('ticketModal');
+            navigate('my-tickets');
+            return;
+        } else if (data.payment_status === 'failed') {
+            const el = document.getElementById('paymentStatusText');
+            if (el) {
+                el.textContent = 'Payment failed or was cancelled.';
+                el.style.color = 'var(--danger)';
+            }
+            showToast('Payment failed. Please try again.', 'error');
+            return;
+        }
+    } catch (err) {
+        // ignore and retry
+    }
+
+    setTimeout(() => pollPaymentStatus(bookingRef, attempts + 1), 3000);
 }
 
 // ─── Filters ────────────────────────────────────────────────
@@ -377,11 +465,18 @@ async function loadMyTickets() {
 
         container.innerHTML = bookings.map(booking => {
             const event = booking.event;
+            const paymentBadge = booking.payment_status === 'completed'
+                ? '<span style="color: var(--secondary); font-size: 0.75rem;"><i class="fas fa-check-circle"></i> Paid</span>'
+                : booking.payment_status === 'pending'
+                    ? '<span style="color: var(--accent-warm); font-size: 0.75rem;"><i class="fas fa-clock"></i> Payment Pending</span>'
+                    : booking.payment_status === 'failed'
+                        ? '<span style="color: var(--danger); font-size: 0.75rem;"><i class="fas fa-times-circle"></i> Payment Failed</span>'
+                        : '';
             return `
                 <div class="ticket-card">
                     <div class="ticket-card-header">
                         <span class="ticket-card-event-name">${escapeHtml(event.title)}</span>
-                        <span class="ticket-status ${booking.status}">${booking.status}</span>
+                        <span class="ticket-status ${booking.status}">${booking.status === 'pending_payment' ? 'pending' : booking.status}</span>
                     </div>
                     <div class="ticket-card-body">
                         <div class="meta-row"><i class="fas fa-hashtag"></i> Ref: ${booking.booking_ref}</div>
@@ -390,11 +485,20 @@ async function loadMyTickets() {
                         <div class="meta-row"><i class="fas fa-map-marker-alt"></i> ${escapeHtml(event.location)}</div>
                         <div class="meta-row"><i class="fas fa-users"></i> ${booking.quantity} ticket(s)</div>
                         <div class="meta-row"><i class="fas fa-money-bill"></i> ${event.currency} ${booking.total_amount.toLocaleString()}</div>
+                        <div class="meta-row">${paymentBadge}</div>
+                        ${booking.payment && booking.payment.mpesa_receipt ? `<div class="meta-row"><i class="fas fa-receipt"></i> M-Pesa: ${booking.payment.mpesa_receipt}</div>` : ''}
                     </div>
                     <div class="ticket-card-footer">
                         ${booking.status === 'confirmed' ? `
                             <button class="btn btn-primary btn-sm" onclick="showTicketQR('${booking.booking_ref}', '${booking.ticket_code}', '${escapeHtml(event.title)}', '${formatDate(event.date)}', ${booking.quantity})">
                                 <i class="fas fa-qrcode"></i> View QR
+                            </button>
+                            <button class="btn btn-danger btn-sm" onclick="cancelBooking('${booking.booking_ref}')">
+                                <i class="fas fa-times"></i> Cancel
+                            </button>
+                        ` : booking.status === 'pending_payment' ? `
+                            <button class="btn btn-primary btn-sm" onclick="showPaymentPendingModal('${booking.booking_ref}')">
+                                <i class="fas fa-clock"></i> Check Payment
                             </button>
                             <button class="btn btn-danger btn-sm" onclick="cancelBooking('${booking.booking_ref}')">
                                 <i class="fas fa-times"></i> Cancel
@@ -592,6 +696,100 @@ async function deleteEvent(publicId) {
     }
 }
 
+// ─── Organizer Earnings ────────────────────────────────────────
+async function loadOrganizerEarnings() {
+    const container = document.getElementById('organizerEarningsContent');
+    if (!container) return;
+    container.innerHTML = '<div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i> Loading earnings...</div>';
+
+    try {
+        const data = await api.getOrganizerEarnings();
+        const e = data.earnings;
+        const commPct = (e.commission_rate * 100).toFixed(0);
+
+        container.innerHTML = `
+            <div class="admin-stats" style="margin-bottom: 32px;">
+                <div class="stat-card">
+                    <div class="stat-card-icon green"><i class="fas fa-money-bill-wave"></i></div>
+                    <div class="stat-card-value">KES ${e.total_sales.toLocaleString()}</div>
+                    <div class="stat-card-label">Total Sales</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-icon yellow"><i class="fas fa-percentage"></i></div>
+                    <div class="stat-card-value">KES ${e.platform_fee.toLocaleString()}</div>
+                    <div class="stat-card-label">Platform Fee (${commPct}%)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-icon purple"><i class="fas fa-wallet"></i></div>
+                    <div class="stat-card-value">KES ${e.net_earnings.toLocaleString()}</div>
+                    <div class="stat-card-label">Net Earnings</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-icon green"><i class="fas fa-check-circle"></i></div>
+                    <div class="stat-card-value">KES ${e.total_paid.toLocaleString()}</div>
+                    <div class="stat-card-label">Paid Out</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-card-icon pink"><i class="fas fa-coins"></i></div>
+                    <div class="stat-card-value">KES ${e.balance.toLocaleString()}</div>
+                    <div class="stat-card-label">Available Balance</div>
+                </div>
+            </div>
+
+            <h3 style="font-family: var(--font-display); margin-bottom: 16px;">Earnings by Event</h3>
+            <div class="events-table-container">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Event</th>
+                            <th>Bookings</th>
+                            <th>Total Sales</th>
+                            <th>Fee (${commPct}%)</th>
+                            <th>Net Earnings</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${e.event_breakdown.map(ev => `
+                            <tr>
+                                <td><strong>${escapeHtml(ev.event.title)}</strong></td>
+                                <td>${ev.bookings}</td>
+                                <td>KES ${ev.total_sales.toLocaleString()}</td>
+                                <td>KES ${ev.commission.toLocaleString()}</td>
+                                <td>KES ${ev.net.toLocaleString()}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+
+            ${e.payouts.length > 0 ? `
+            <h3 style="font-family: var(--font-display); margin: 32px 0 16px;">Payout History</h3>
+            <div class="events-table-container">
+                <table class="data-table">
+                    <thead>
+                        <tr><th>Ref</th><th>Amount</th><th>Fee</th><th>Net</th><th>Status</th><th>Date</th></tr>
+                    </thead>
+                    <tbody>
+                        ${e.payouts.map(p => `
+                            <tr>
+                                <td>${p.payout_ref}</td>
+                                <td>KES ${p.amount.toLocaleString()}</td>
+                                <td>KES ${p.commission_amount.toLocaleString()}</td>
+                                <td>KES ${p.net_amount.toLocaleString()}</td>
+                                <td><span class="status-badge ${p.status}">${p.status}</span></td>
+                                <td>${formatDate(p.created_at?.split('T')[0])}</td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+            ` : ''}
+        `;
+    } catch (err) {
+        container.innerHTML = '<div class="empty-state"><h3>Unable to load earnings</h3></div>';
+    }
+}
+
 // ─── Admin Panel ────────────────────────────────────────────
 async function loadAdminPanel() {
     if (!currentUser || currentUser.role !== 'admin') {
@@ -639,6 +837,16 @@ async function loadAdminStats() {
                 <div class="stat-card-value">${s.verified_tickets}</div>
                 <div class="stat-card-label">Verified Tickets</div>
             </div>
+            <div class="stat-card">
+                <div class="stat-card-icon yellow"><i class="fas fa-hand-holding-usd"></i></div>
+                <div class="stat-card-value">KES ${(s.total_commission || 0).toLocaleString()}</div>
+                <div class="stat-card-label">Commission Earned</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-card-icon pink"><i class="fas fa-file-invoice-dollar"></i></div>
+                <div class="stat-card-value">${s.pending_payouts || 0}</div>
+                <div class="stat-card-label">Pending Payouts</div>
+            </div>
         `;
     } catch {
         container.innerHTML = '<div class="empty-state"><h3>Unable to load stats</h3></div>';
@@ -648,7 +856,7 @@ async function loadAdminStats() {
 async function switchAdminTab(tab) {
     document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
     document.querySelectorAll('.tab-btn').forEach(b => {
-        if (b.textContent.toLowerCase().includes(tab)) b.classList.add('active');
+        if (b.dataset.tab === tab) b.classList.add('active');
     });
 
     const container = document.getElementById('adminTabContent');
@@ -657,6 +865,156 @@ async function switchAdminTab(tab) {
         case 'events': await loadAdminEvents(container); break;
         case 'users': await loadAdminUsers(container); break;
         case 'verify': renderVerifySection(container); break;
+        case 'payouts': await loadAdminPayouts(container); break;
+        case 'settlements': await loadAdminSettlements(container); break;
+    }
+}
+
+async function loadAdminPayouts(container) {
+    container.innerHTML = '<div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
+    try {
+        const data = await api.getAdminOrganizerEarnings();
+        const organizers = data.organizer_earnings;
+
+        container.innerHTML = `
+            <h3 style="font-family: var(--font-display); margin-bottom: 16px;">Organizer Earnings & Settlements</h3>
+            <div class="events-table-container">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Organizer</th>
+                            <th>Events</th>
+                            <th>Total Sales</th>
+                            <th>Commission (10%)</th>
+                            <th>Net Earnings</th>
+                            <th>Paid</th>
+                            <th>Balance</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        ${organizers.map(o => `
+                            <tr>
+                                <td><strong>${escapeHtml(o.organizer.full_name)}</strong></td>
+                                <td>${o.event_count}</td>
+                                <td>KES ${o.total_sales.toLocaleString()}</td>
+                                <td>KES ${o.commission.toLocaleString()}</td>
+                                <td>KES ${o.net_earnings.toLocaleString()}</td>
+                                <td>KES ${o.total_paid.toLocaleString()}</td>
+                                <td><strong>KES ${o.balance.toLocaleString()}</strong></td>
+                                <td>
+                                    <div class="table-actions">
+                                        ${o.balance > 0 ? `
+                                        <button class="btn btn-success btn-sm" onclick="initPayout(${o.organizer.id}, '${escapeHtml(o.organizer.full_name)}', ${o.balance})">
+                                            <i class="fas fa-paper-plane"></i> Pay
+                                        </button>
+                                        ` : '<span style="color: var(--text-muted); font-size: 0.8rem;">Settled</span>'}
+                                    </div>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+    } catch (err) {
+        container.innerHTML = '<div class="empty-state"><h3>Unable to load organizer earnings</h3></div>';
+    }
+}
+
+async function initPayout(organizerId, name, maxAmount) {
+    const amount = prompt(`Enter payout amount for ${name} (max KES ${maxAmount.toLocaleString()}):`, maxAmount);
+    if (!amount) return;
+    const amountNum = parseFloat(amount);
+    if (isNaN(amountNum) || amountNum <= 0) {
+        showToast('Invalid amount', 'error');
+        return;
+    }
+    try {
+        await api.createPayout(organizerId, amountNum, `Payout to ${name}`);
+        showToast('Payout created!', 'success');
+        switchAdminTab('payouts');
+        loadAdminStats();
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+async function loadAdminSettlements(container) {
+    container.innerHTML = '<div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i> Loading...</div>';
+    try {
+        const data = await api.getAdminPayouts();
+        const payouts = data.payouts;
+
+        if (!payouts.length) {
+            container.innerHTML = '<div class="empty-state"><h3>No payouts yet</h3><p>Create payouts from the Payouts tab.</p></div>';
+            return;
+        }
+
+        container.innerHTML = `
+            <h3 style="font-family: var(--font-display); margin-bottom: 16px;">Payout History</h3>
+            <div class="events-table-container">
+                <table class="data-table">
+                    <thead>
+                        <tr><th>Ref</th><th>Organizer</th><th>Gross</th><th>Fee</th><th>Net</th><th>Status</th><th>Actions</th></tr>
+                    </thead>
+                    <tbody>
+                        ${payouts.map(p => `
+                            <tr>
+                                <td>${p.payout_ref}</td>
+                                <td>${escapeHtml(p.organizer?.full_name || 'N/A')}</td>
+                                <td>KES ${p.amount.toLocaleString()}</td>
+                                <td>KES ${p.commission_amount.toLocaleString()}</td>
+                                <td>KES ${p.net_amount.toLocaleString()}</td>
+                                <td><span class="status-badge ${p.status}">${p.status}</span></td>
+                                <td>
+                                    <div class="table-actions">
+                                        ${p.status === 'pending' ? `
+                                            <button class="btn btn-success btn-sm" onclick="completePayout(${p.id})" title="Mark completed">
+                                                <i class="fas fa-check"></i>
+                                            </button>
+                                            <button class="btn btn-danger btn-sm" onclick="failPayout(${p.id})" title="Mark failed">
+                                                <i class="fas fa-times"></i>
+                                            </button>
+                                        ` : p.status === 'completed' ? `
+                                            <span style="color: var(--secondary); font-size: 0.8rem;"><i class="fas fa-check-circle"></i> Done</span>
+                                        ` : `
+                                            <span style="color: var(--danger); font-size: 0.8rem;"><i class="fas fa-times-circle"></i> Failed</span>
+                                        `}
+                                    </div>
+                                </td>
+                            </tr>
+                        `).join('')}
+                    </tbody>
+                </table>
+            </div>
+        `;
+    } catch (err) {
+        container.innerHTML = '<div class="empty-state"><h3>Unable to load settlements</h3></div>';
+    }
+}
+
+async function completePayout(payoutId) {
+    const ref = prompt('Enter payment reference (e.g. M-Pesa receipt):');
+    if (ref === null) return;
+    try {
+        await api.processPayout(payoutId, 'complete', ref);
+        showToast('Payout completed!', 'success');
+        switchAdminTab('settlements');
+        loadAdminStats();
+    } catch (err) {
+        showToast(err.message, 'error');
+    }
+}
+
+async function failPayout(payoutId) {
+    if (!confirm('Mark this payout as failed?')) return;
+    try {
+        await api.processPayout(payoutId, 'fail', '', 'Marked failed by admin');
+        showToast('Payout marked as failed', 'info');
+        switchAdminTab('settlements');
+    } catch (err) {
+        showToast(err.message, 'error');
     }
 }
 
