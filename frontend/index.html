@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tiko Zetu — Event Ticketing Kenya</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+<!-- ─── Navigation ──────────────────────────────────────────── -->
+<nav class="navbar" id="navbar">
+    <div class="nav-container">
+        <a href="#" class="nav-logo" onclick="navigate('home')">
+            <span class="logo-icon"><i class="fas fa-ticket-alt"></i></span>
+            <span class="logo-text">Tiko<span class="logo-accent">Zetu</span></span>
+        </a>
+        <div class="nav-links" id="navLinks">
+            <a href="#" class="nav-link active" onclick="navigate('home')"><i class="fas fa-home"></i> Home</a>
+            <a href="#" class="nav-link" onclick="navigate('events')"><i class="fas fa-calendar"></i> Events</a>
+            <a href="#" class="nav-link auth-only" onclick="navigate('my-tickets')" style="display:none"><i class="fas fa-ticket-alt"></i> My Tickets</a>
+            <a href="#" class="nav-link organizer-only" onclick="navigate('organizer-dashboard')" style="display:none"><i class="fas fa-chart-bar"></i> Dashboard</a>
+            <a href="#" class="nav-link admin-only" onclick="navigate('admin')" style="display:none"><i class="fas fa-shield-alt"></i> Admin</a>
+        </div>
+        <div class="nav-actions">
+            <div class="guest-actions" id="guestActions">
+                <button class="btn btn-outline btn-sm" onclick="navigate('login')">Log In</button>
+                <button class="btn btn-primary btn-sm" onclick="navigate('register')">Sign Up</button>
+            </div>
+            <div class="user-actions" id="userActions" style="display:none">
+                <div class="user-avatar" id="userAvatar" onclick="toggleUserMenu()">
+                    <span id="avatarInitial">U</span>
+                </div>
+                <div class="user-dropdown" id="userDropdown">
+                    <div class="dropdown-header">
+                        <strong id="dropdownName">User</strong>
+                        <small id="dropdownRole">attendee</small>
+                    </div>
+                    <div class="dropdown-divider"></div>
+                    <a href="#" onclick="navigate('my-tickets')"><i class="fas fa-ticket-alt"></i> My Tickets</a>
+                    <a href="#" onclick="navigate('profile')"><i class="fas fa-user"></i> Profile</a>
+                    <div class="dropdown-divider"></div>
+                    <a href="#" onclick="handleLogout()" class="text-danger"><i class="fas fa-sign-out-alt"></i> Log Out</a>
+                </div>
+            </div>
+            <button class="nav-toggle" id="navToggle" onclick="toggleMobileNav()">
+                <i class="fas fa-bars"></i>
+            </button>
+        </div>
+    </div>
+</nav>
+
+<!-- ─── Toast Notification ──────────────────────────────────── -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- ─── Main Content ────────────────────────────────────────── -->
+<main class="main-content" id="mainContent">
+
+    <!-- ── Home Page ──────────────────────────────────────── -->
+    <section class="page page-home active" id="page-home">
+        <div class="hero">
+            <div class="hero-bg"></div>
+            <div class="hero-content">
+                <div class="hero-badge"><i class="fas fa-bolt"></i> Kenya's Premier Event Platform</div>
+                <h1 class="hero-title">Discover <span class="gradient-text">Amazing Events</span> Near You</h1>
+                <p class="hero-subtitle">Book tickets instantly, get digital QR-coded passes, and experience seamless entry at events across Kenya.</p>
+                <div class="hero-actions">
+                    <button class="btn btn-primary btn-lg" onclick="navigate('events')">
+                        <i class="fas fa-search"></i> Explore Events
+                    </button>
+                    <button class="btn btn-glass btn-lg" onclick="navigate('register')">
+                        <i class="fas fa-user-plus"></i> Get Started
+                    </button>
+                </div>
+                <div class="hero-stats">
+                    <div class="stat-item">
+                        <span class="stat-number" id="statEvents">50+</span>
+                        <span class="stat-label">Events</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-number">10K+</span>
+                        <span class="stat-label">Tickets Sold</span>
+                    </div>
+                    <div class="stat-item">
+                        <span class="stat-number">5K+</span>
+                        <span class="stat-label">Happy Users</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="section-container">
+            <div class="section-header">
+                <h2 class="section-title">Featured <span class="gradient-text">Events</span></h2>
+                <p class="section-subtitle">Don't miss out on these amazing experiences</p>
+            </div>
+            <div class="events-grid" id="featuredEventsGrid">
+                <div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i> Loading events...</div>
+            </div>
+        </div>
+
+        <div class="section-container categories-section">
+            <div class="section-header">
+                <h2 class="section-title">Browse by <span class="gradient-text">Category</span></h2>
+            </div>
+            <div class="categories-grid">
+                <div class="category-card" onclick="filterByCategory('music')">
+                    <div class="category-icon"><i class="fas fa-music"></i></div>
+                    <span>Music</span>
+                </div>
+                <div class="category-card" onclick="filterByCategory('technology')">
+                    <div class="category-icon"><i class="fas fa-laptop-code"></i></div>
+                    <span>Technology</span>
+                </div>
+                <div class="category-card" onclick="filterByCategory('sports')">
+                    <div class="category-icon"><i class="fas fa-running"></i></div>
+                    <span>Sports</span>
+                </div>
+                <div class="category-card" onclick="filterByCategory('food')">
+                    <div class="category-icon"><i class="fas fa-utensils"></i></div>
+                    <span>Food</span>
+                </div>
+                <div class="category-card" onclick="filterByCategory('art')">
+                    <div class="category-icon"><i class="fas fa-palette"></i></div>
+                    <span>Art</span>
+                </div>
+                <div class="category-card" onclick="filterByCategory('culture')">
+                    <div class="category-icon"><i class="fas fa-landmark"></i></div>
+                    <span>Culture</span>
+                </div>
+                <div class="category-card" onclick="filterByCategory('business')">
+                    <div class="category-icon"><i class="fas fa-briefcase"></i></div>
+                    <span>Business</span>
+                </div>
+                <div class="category-card" onclick="filterByCategory('general')">
+                    <div class="category-icon"><i class="fas fa-star"></i></div>
+                    <span>General</span>
+                </div>
+            </div>
+        </div>
+
+        <div class="section-container cta-section">
+            <div class="cta-card">
+                <div class="cta-content">
+                    <h2>Are You an Event Organizer?</h2>
+                    <p>List your events on Tiko Zetu and reach thousands of attendees across Kenya. Easy setup, powerful analytics, and instant ticket sales.</p>
+                    <button class="btn btn-primary btn-lg" onclick="navigate('register')">
+                        <i class="fas fa-rocket"></i> Start Listing Events
+                    </button>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ── Events Page ────────────────────────────────────── -->
+    <section class="page page-events" id="page-events">
+        <div class="page-header">
+            <h1 class="page-title">All <span class="gradient-text">Events</span></h1>
+            <p class="page-subtitle">Find your next unforgettable experience</p>
+        </div>
+        <div class="section-container">
+            <div class="filters-bar">
+                <div class="search-box">
+                    <i class="fas fa-search"></i>
+                    <input type="text" id="searchInput" placeholder="Search events..." oninput="debounceSearch()">
+                </div>
+                <div class="filter-group">
+                    <select id="categoryFilter" onchange="applyFilters()">
+                        <option value="">All Categories</option>
+                        <option value="music">Music</option>
+                        <option value="technology">Technology</option>
+                        <option value="sports">Sports</option>
+                        <option value="food">Food & Drink</option>
+                        <option value="art">Art</option>
+                        <option value="culture">Culture</option>
+                        <option value="business">Business</option>
+                        <option value="general">General</option>
+                    </select>
+                    <select id="locationFilter" onchange="applyFilters()">
+                        <option value="">All Locations</option>
+                        <option value="Nairobi">Nairobi</option>
+                        <option value="Mombasa">Mombasa</option>
+                        <option value="Kisumu">Kisumu</option>
+                        <option value="Nakuru">Nakuru</option>
+                        <option value="Lamu">Lamu</option>
+                        <option value="Narok">Narok</option>
+                    </select>
+                    <select id="priceFilter" onchange="applyFilters()">
+                        <option value="">Any Price</option>
+                        <option value="0-0">Free</option>
+                        <option value="1-1000">Under KES 1,000</option>
+                        <option value="1000-5000">KES 1,000 - 5,000</option>
+                        <option value="5000-100000">Over KES 5,000</option>
+                    </select>
+                </div>
+            </div>
+            <div class="events-grid" id="allEventsGrid">
+                <div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i> Loading events...</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ── Event Detail ───────────────────────────────────── -->
+    <section class="page page-event-detail" id="page-event-detail">
+        <div class="section-container">
+            <button class="btn btn-ghost btn-sm back-btn" onclick="navigate('events')">
+                <i class="fas fa-arrow-left"></i> Back to Events
+            </button>
+            <div class="event-detail" id="eventDetailContent">
+                <div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i> Loading...</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ── Login Page ─────────────────────────────────────── -->
+    <section class="page page-login" id="page-login">
+        <div class="auth-container">
+            <div class="auth-card">
+                <div class="auth-header">
+                    <div class="auth-logo"><i class="fas fa-ticket-alt"></i></div>
+                    <h2>Welcome Back</h2>
+                    <p>Log in to access your tickets and events</p>
+                </div>
+                <form id="loginForm" onsubmit="handleLogin(event)">
+                    <div class="form-group">
+                        <label for="loginIdentifier">Username or Email</label>
+                        <div class="input-wrapper">
+                            <i class="fas fa-user"></i>
+                            <input type="text" id="loginIdentifier" placeholder="Enter username or email" required>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="loginPassword">Password</label>
+                        <div class="input-wrapper">
+                            <i class="fas fa-lock"></i>
+                            <input type="password" id="loginPassword" placeholder="Enter password" required>
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block" id="loginBtn">
+                        <span>Log In</span>
+                    </button>
+                </form>
+                <div class="auth-footer">
+                    <p>Don't have an account? <a href="#" onclick="navigate('register')">Sign Up</a></p>
+                </div>
+                <div class="demo-credentials">
+                    <p><strong>Demo Accounts:</strong></p>
+                    <small>Admin: admin / admin123</small><br>
+                    <small>Organizer: events_ke / organizer123</small><br>
+                    <small>Attendee: jane_doe / attendee123</small>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ── Register Page ──────────────────────────────────── -->
+    <section class="page page-register" id="page-register">
+        <div class="auth-container">
+            <div class="auth-card">
+                <div class="auth-header">
+                    <div class="auth-logo"><i class="fas fa-user-plus"></i></div>
+                    <h2>Create Account</h2>
+                    <p>Join Tiko Zetu and start booking amazing events</p>
+                </div>
+                <form id="registerForm" onsubmit="handleRegister(event)">
+                    <div class="form-group">
+                        <label for="regFullName">Full Name</label>
+                        <div class="input-wrapper">
+                            <i class="fas fa-user"></i>
+                            <input type="text" id="regFullName" placeholder="John Doe" required>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="regUsername">Username</label>
+                        <div class="input-wrapper">
+                            <i class="fas fa-at"></i>
+                            <input type="text" id="regUsername" placeholder="johndoe" required>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="regEmail">Email</label>
+                        <div class="input-wrapper">
+                            <i class="fas fa-envelope"></i>
+                            <input type="email" id="regEmail" placeholder="john@example.com" required>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="regPhone">Phone (optional)</label>
+                        <div class="input-wrapper">
+                            <i class="fas fa-phone"></i>
+                            <input type="tel" id="regPhone" placeholder="+254 700 000 000">
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="regRole">I want to</label>
+                        <div class="input-wrapper">
+                            <i class="fas fa-users"></i>
+                            <select id="regRole" required>
+                                <option value="attendee">Attend Events</option>
+                                <option value="organizer">Organize Events</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="form-group">
+                        <label for="regPassword">Password</label>
+                        <div class="input-wrapper">
+                            <i class="fas fa-lock"></i>
+                            <input type="password" id="regPassword" placeholder="Min 6 characters" required minlength="6">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block" id="registerBtn">
+                        <span>Create Account</span>
+                    </button>
+                </form>
+                <div class="auth-footer">
+                    <p>Already have an account? <a href="#" onclick="navigate('login')">Log In</a></p>
+                </div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ── My Tickets Page ────────────────────────────────── -->
+    <section class="page page-my-tickets" id="page-my-tickets">
+        <div class="page-header">
+            <h1 class="page-title">My <span class="gradient-text">Tickets</span></h1>
+            <p class="page-subtitle">View and manage your bookings</p>
+        </div>
+        <div class="section-container">
+            <div class="tickets-list" id="ticketsList">
+                <div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i> Loading tickets...</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ── Ticket Detail / QR Modal ───────────────────────── -->
+    <div class="modal" id="ticketModal">
+        <div class="modal-overlay" onclick="closeModal('ticketModal')"></div>
+        <div class="modal-content ticket-modal-content">
+            <button class="modal-close" onclick="closeModal('ticketModal')"><i class="fas fa-times"></i></button>
+            <div id="ticketModalBody"></div>
+        </div>
+    </div>
+
+    <!-- ── Organizer Dashboard ────────────────────────────── -->
+    <section class="page page-organizer-dashboard" id="page-organizer-dashboard">
+        <div class="page-header">
+            <h1 class="page-title">Organizer <span class="gradient-text">Dashboard</span></h1>
+            <p class="page-subtitle">Manage your events and track performance</p>
+        </div>
+        <div class="section-container">
+            <div class="dashboard-actions">
+                <button class="btn btn-primary" onclick="openCreateEventModal()">
+                    <i class="fas fa-plus"></i> Create Event
+                </button>
+            </div>
+            <div class="events-table-container" id="organizerEventsContainer">
+                <div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i> Loading...</div>
+            </div>
+        </div>
+    </section>
+
+    <!-- ── Create / Edit Event Modal ──────────────────────── -->
+    <div class="modal" id="eventFormModal">
+        <div class="modal-overlay" onclick="closeModal('eventFormModal')"></div>
+        <div class="modal-content modal-lg">
+            <button class="modal-close" onclick="closeModal('eventFormModal')"><i class="fas fa-times"></i></button>
+            <div class="modal-header">
+                <h2 id="eventFormTitle">Create New Event</h2>
+            </div>
+            <form id="eventForm" onsubmit="handleEventSubmit(event)">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="evtTitle">Event Title</label>
+                        <input type="text" id="evtTitle" required placeholder="e.g. Nairobi Tech Summit">
+                    </div>
+                    <div class="form-group">
+                        <label for="evtCategory">Category</label>
+                        <select id="evtCategory" required>
+                            <option value="general">General</option>
+                            <option value="music">Music</option>
+                            <option value="technology">Technology</option>
+                            <option value="sports">Sports</option>
+                            <option value="food">Food & Drink</option>
+                            <option value="art">Art</option>
+                            <option value="culture">Culture</option>
+                            <option value="business">Business</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="evtDescription">Description</label>
+                    <textarea id="evtDescription" rows="4" required placeholder="Describe your event..."></textarea>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="evtLocation">Location (City)</label>
+                        <input type="text" id="evtLocation" required placeholder="e.g. Nairobi">
+                    </div>
+                    <div class="form-group">
+                        <label for="evtVenue">Venue</label>
+                        <input type="text" id="evtVenue" placeholder="e.g. KICC Convention Center">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="evtDate">Date</label>
+                        <input type="date" id="evtDate" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="evtStartTime">Start Time</label>
+                        <input type="time" id="evtStartTime" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="evtEndTime">End Time</label>
+                        <input type="time" id="evtEndTime">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="evtPrice">Price (KES)</label>
+                        <input type="number" id="evtPrice" min="0" value="0" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="evtTickets">Total Tickets</label>
+                        <input type="number" id="evtTickets" min="1" value="100" required>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <label for="evtImage">Image URL (optional)</label>
+                    <input type="url" id="evtImage" placeholder="https://example.com/image.jpg">
+                </div>
+                <input type="hidden" id="evtEditId" value="">
+                <div class="form-actions">
+                    <button type="button" class="btn btn-ghost" onclick="closeModal('eventFormModal')">Cancel</button>
+                    <button type="submit" class="btn btn-primary" id="eventFormSubmitBtn">Create Event</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- ── Admin Panel ────────────────────────────────────── -->
+    <section class="page page-admin" id="page-admin">
+        <div class="page-header">
+            <h1 class="page-title">Admin <span class="gradient-text">Panel</span></h1>
+            <p class="page-subtitle">Manage users, events, and system activity</p>
+        </div>
+        <div class="section-container">
+            <div class="admin-stats" id="adminStats">
+                <div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i> Loading stats...</div>
+            </div>
+
+            <div class="admin-tabs">
+                <button class="tab-btn active" onclick="switchAdminTab('events')">
+                    <i class="fas fa-calendar"></i> Events
+                </button>
+                <button class="tab-btn" onclick="switchAdminTab('users')">
+                    <i class="fas fa-users"></i> Users
+                </button>
+                <button class="tab-btn" onclick="switchAdminTab('verify')">
+                    <i class="fas fa-qrcode"></i> Verify Tickets
+                </button>
+            </div>
+
+            <div class="admin-tab-content" id="adminTabContent">
+                <div class="loading-spinner"><i class="fas fa-spinner fa-spin"></i> Loading...</div>
+            </div>
+        </div>
+    </section>
+
+</main>
+
+<!-- ─── Footer ──────────────────────────────────────────────── -->
+<footer class="footer">
+    <div class="footer-container">
+        <div class="footer-grid">
+            <div class="footer-brand">
+                <div class="nav-logo">
+                    <span class="logo-icon"><i class="fas fa-ticket-alt"></i></span>
+                    <span class="logo-text">Tiko<span class="logo-accent">Zetu</span></span>
+                </div>
+                <p>Kenya's premier digital event ticketing platform. Discover, book, and experience amazing events.</p>
+            </div>
+            <div class="footer-links">
+                <h4>Quick Links</h4>
+                <a href="#" onclick="navigate('events')">Browse Events</a>
+                <a href="#" onclick="navigate('register')">Create Account</a>
+                <a href="#" onclick="navigate('login')">Log In</a>
+            </div>
+            <div class="footer-links">
+                <h4>Categories</h4>
+                <a href="#" onclick="filterByCategory('music')">Music</a>
+                <a href="#" onclick="filterByCategory('technology')">Technology</a>
+                <a href="#" onclick="filterByCategory('sports')">Sports</a>
+                <a href="#" onclick="filterByCategory('food')">Food & Drink</a>
+            </div>
+            <div class="footer-links">
+                <h4>Contact</h4>
+                <p><i class="fas fa-envelope"></i> info@tikozetu.co.ke</p>
+                <p><i class="fas fa-phone"></i> +254 700 000 000</p>
+                <p><i class="fas fa-map-marker-alt"></i> Nairobi, Kenya</p>
+            </div>
+        </div>
+        <div class="footer-bottom">
+            <p>&copy; 2026 Tiko Zetu. All rights reserved.</p>
+        </div>
+    </div>
+</footer>
+
+<script src="js/api.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
